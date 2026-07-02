@@ -506,6 +506,12 @@
           "description": "Focus the last focused pane across workspaces and tabs. Unset by default."
         },
         {
+          "key": "keys.last_workspace",
+          "type": "keybinding",
+          "default": "unset",
+          "description": "Focus the last focused workspace. Unset by default."
+        },
+        {
           "key": "keys.split_vertical",
           "type": "keybinding",
           "default": "\"prefix+v\"",

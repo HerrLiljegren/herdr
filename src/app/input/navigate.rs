@@ -427,6 +427,10 @@ impl App {
                 self.last_pane_via_api();
                 leave_navigate_mode(&mut self.state);
             }
+            NavigateAction::LastWorkspace => {
+                self.last_workspace_via_api();
+                leave_navigate_mode(&mut self.state);
+            }
             NavigateAction::Help => super::modal::open_keybind_help(&mut self.state),
             NavigateAction::Settings => super::settings::open_settings(&mut self.state),
             NavigateAction::ReloadConfig => {
@@ -688,6 +692,27 @@ impl App {
             return;
         }
         self.focus_pane_internal_via_api(ws_idx, target.pane_id);
+    }
+
+    pub(crate) fn last_workspace_via_api(&mut self) {
+        let Some(workspace_id) = self.state.previous_workspace_id.clone() else {
+            return;
+        };
+        let Some(ws_idx) = self
+            .state
+            .workspaces
+            .iter()
+            .position(|workspace| workspace.id == workspace_id)
+        else {
+            self.state.previous_workspace_id = None;
+            return;
+        };
+        if self.state.active == Some(ws_idx) {
+            self.state.previous_workspace_id = None;
+            return;
+        }
+
+        self.focus_workspace_idx_via_api(ws_idx);
     }
 
     pub(crate) fn focus_toast_target_via_api(&mut self) {
@@ -1424,6 +1449,7 @@ pub(crate) enum NavigateAction {
     CyclePaneNext,
     CyclePanePrevious,
     LastPane,
+    LastWorkspace,
     Help,
     Settings,
     ReloadConfig,
@@ -1559,6 +1585,7 @@ fn non_indexed_action_for_key(
         (&kb.swap_pane_up, NavigateAction::SwapPaneUp),
         (&kb.swap_pane_right, NavigateAction::SwapPaneRight),
         (&kb.last_pane, NavigateAction::LastPane),
+        (&kb.last_workspace, NavigateAction::LastWorkspace),
         (&kb.cycle_pane_next, NavigateAction::CyclePaneNext),
         (&kb.cycle_pane_previous, NavigateAction::CyclePanePrevious),
         (&kb.split_vertical, NavigateAction::SplitVertical),
@@ -1839,6 +1866,10 @@ pub(super) fn execute_navigate_action_in_context(
         }
         NavigateAction::LastPane => {
             state.last_pane();
+            leave_navigate_mode(state);
+        }
+        NavigateAction::LastWorkspace => {
+            state.last_workspace();
             leave_navigate_mode(state);
         }
         NavigateAction::Help => super::modal::open_keybind_help(state),
@@ -2834,6 +2865,27 @@ last_pane = "prefix+tab"
         );
 
         assert_eq!(pane_action, Some(NavigateAction::LastPane));
+    }
+
+    #[test]
+    fn prefix_binding_can_map_to_last_workspace() {
+        let config: Config = toml::from_str(
+            r#"
+[keys]
+last_workspace = "prefix+shift+l"
+"#,
+        )
+        .unwrap();
+        let mut state = state_with_workspaces(&["test"]);
+        state.keybinds = config.keybinds();
+
+        let action = action_for_key(
+            &state,
+            TerminalKey::new(KeyCode::Char('l'), KeyModifiers::SHIFT),
+            BindingDispatch::Prefix,
+        );
+
+        assert_eq!(action, Some(NavigateAction::LastWorkspace));
     }
 
     #[test]

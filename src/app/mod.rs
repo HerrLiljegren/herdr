@@ -533,6 +533,7 @@ impl App {
             public_pane_id_aliases: std::collections::HashMap::new(),
             workspaces,
             active,
+            previous_workspace_id: None,
             previous_pane_focus: None,
             selected,
             mode,
@@ -5275,6 +5276,50 @@ last_pane = "prefix+tab"
 
         assert_eq!(app.state.active, Some(1));
         assert_eq!(app.state.workspaces[1].focused_pane_id(), Some(second_root));
+    }
+
+    #[test]
+    fn route_client_input_prefix_tab_dispatches_global_last_workspace() {
+        let config: Config = toml::from_str(
+            r#"
+[keys]
+last_workspace = "prefix+tab"
+"#,
+        )
+        .unwrap();
+        let mut app = test_app();
+        let mut first = Workspace::test_new("one");
+        let first_second_tab = first.test_add_tab(Some("logs"));
+        let first_second_root = first.tabs[first_second_tab].root_pane;
+        let mut second = Workspace::test_new("two");
+        let second_second_tab = second.test_add_tab(Some("review"));
+        let second_second_root = second.tabs[second_second_tab].root_pane;
+        app.state.workspaces = vec![first, second];
+        app.state.active = Some(0);
+        app.state.selected = 0;
+        app.state.keybinds = config.keybinds();
+        app.state.mode = Mode::Terminal;
+        app.state.switch_workspace_tab(0, first_second_tab);
+        app.state.switch_workspace_tab(1, second_second_tab);
+
+        app.route_client_input(vec![0x02, b'\t']);
+
+        assert_eq!(app.state.mode, Mode::Terminal);
+        assert_eq!(app.state.active, Some(0));
+        assert_eq!(app.state.workspaces[0].active_tab, first_second_tab);
+        assert_eq!(
+            app.state.workspaces[0].focused_pane_id(),
+            Some(first_second_root)
+        );
+
+        app.route_client_input(vec![0x02, b'\t']);
+
+        assert_eq!(app.state.active, Some(1));
+        assert_eq!(app.state.workspaces[1].active_tab, second_second_tab);
+        assert_eq!(
+            app.state.workspaces[1].focused_pane_id(),
+            Some(second_second_root)
+        );
     }
 
     #[tokio::test]
