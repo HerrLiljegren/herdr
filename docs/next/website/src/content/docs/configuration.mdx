@@ -179,6 +179,7 @@ swap_pane_right = "prefix+shift+l"
 cycle_pane_next = "prefix+tab"
 cycle_pane_previous = "prefix+shift+tab"
 last_pane = ""
+last_workspace = ""
 split_vertical = "prefix+v"
 split_horizontal = "prefix+minus"
 close_pane = "prefix+x"
@@ -194,12 +195,15 @@ Optional actions are unset by default. Bind them with `prefix+` for prefix-mode 
 previous_workspace = "prefix+shift+left"
 next_workspace = "prefix+shift+right"
 last_pane = "prefix+tab"
+last_workspace = "prefix+shift+l"
 open_worktree = "prefix+shift+o"
 remove_worktree = "prefix+alt+d"
 next_tab = ["prefix+n", "ctrl+alt+]"]
 ```
 
 `last_pane` switches back to the last focused pane across workspaces and tabs. It is unset by default because the tmux-style pane binding `prefix+l` is already used for pane-right focus.
+
+`last_workspace` switches back to the previously focused workspace. Moving between panes or tabs inside the active workspace does not change that target. It is unset by default. Binding it to `prefix+shift+l` replaces the default `swap_pane_right` binding; choose another key if you use pane swapping.
 
 `remote_image_paste` is only active in `herdr --remote`. It is the local-client shortcut that sends a local clipboard image to the remote pane. Set it to an empty string to disable the raw-key shortcut; remote terminal paste-image signals still work when the outer terminal sends them.
 

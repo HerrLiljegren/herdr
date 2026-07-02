@@ -1322,6 +1322,7 @@ pub struct AppState {
     pub(crate) public_pane_id_aliases: std::collections::HashMap<String, PaneId>,
     pub workspaces: Vec<Workspace>,
     pub active: Option<usize>,
+    pub(crate) previous_workspace_id: Option<String>,
     pub(crate) previous_pane_focus: Option<PaneFocusTarget>,
     pub selected: usize,
     pub mode: Mode,
@@ -1680,6 +1681,7 @@ impl AppState {
             public_pane_id_aliases: std::collections::HashMap::new(),
             workspaces: Vec::new(),
             active: None,
+            previous_workspace_id: None,
             previous_pane_focus: None,
             selected: 0,
             mode: Mode::Navigate,
@@ -2032,6 +2034,12 @@ impl AppState {
         }
         if let Some(focus) = &self.previous_pane_focus {
             assert_workspace_pane(&focus.workspace_id, focus.pane_id, "previous pane focus");
+        }
+        if let Some(workspace_id) = &self.previous_workspace_id {
+            assert!(
+                self.workspaces.iter().any(|ws| &ws.id == workspace_id),
+                "previous workspace must reference a live workspace"
+            );
         }
         if let Some(toast) = &self.toast {
             if let Some(target) = &toast.target {

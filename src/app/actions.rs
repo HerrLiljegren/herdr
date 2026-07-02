@@ -250,6 +250,24 @@ pub struct PaneStateUpdate {
 // ---------------------------------------------------------------------------
 
 impl AppState {
+    fn current_workspace_id(&self) -> Option<String> {
+        let ws_idx = self.active?;
+        self.workspaces.get(ws_idx).map(|ws| ws.id.clone())
+    }
+
+    fn record_workspace_after_navigation(&mut self, previous: Option<String>) {
+        let current = self.current_workspace_id();
+        if previous != current {
+            self.previous_workspace_id = previous;
+        }
+    }
+
+    fn forget_workspace_history_for(&mut self, workspace_id: &str) {
+        if self.previous_workspace_id.as_deref() == Some(workspace_id) {
+            self.previous_workspace_id = None;
+        }
+    }
+
     pub(crate) fn current_pane_focus_target(&self) -> Option<PaneFocusTarget> {
         let ws_idx = self.active?;
         let ws = self.workspaces.get(ws_idx)?;
@@ -960,6 +978,7 @@ impl AppState {
 
     pub fn switch_workspace(&mut self, idx: usize) {
         if idx < self.workspaces.len() {
+            let previous_workspace = self.current_workspace_id();
             let previous_focus = self.current_pane_focus_target();
             self.active = Some(idx);
             self.selected = idx;
@@ -976,6 +995,7 @@ impl AppState {
             }
             self.tab_scroll_follow_active = true;
             self.refresh_tab_bar_view();
+            self.record_workspace_after_navigation(previous_workspace);
             self.record_pane_focus_after_navigation(previous_focus);
             self.sync_selection_after_focus_navigation();
         }
@@ -994,6 +1014,7 @@ impl AppState {
         }
 
         let previous_focus = self.current_pane_focus_target();
+        let previous_workspace = self.current_workspace_id();
         let workspace_changed = self.active != Some(ws_idx);
         self.active = Some(ws_idx);
         self.selected = ws_idx;
@@ -1011,6 +1032,9 @@ impl AppState {
         }
         self.tab_scroll_follow_active = true;
         self.refresh_tab_bar_view();
+        if workspace_changed {
+            self.record_workspace_after_navigation(previous_workspace);
+        }
         self.record_pane_focus_after_navigation(previous_focus);
         self.sync_selection_after_focus_navigation();
         true
@@ -1480,14 +1504,19 @@ impl AppState {
 
         let mut terminal_ids = Vec::new();
         let mut pane_ids = Vec::new();
+        let mut closed_workspace_ids = Vec::new();
         for idx in &close_indices {
             terminal_ids.extend(self.terminal_ids_for_workspace(*idx));
             pane_ids.extend(self.pane_ids_for_workspace(*idx));
             if let Some(workspace_id) = self.workspaces.get(*idx).map(|ws| ws.id.clone()) {
                 crate::logging::workspace_closed(&workspace_id);
+                closed_workspace_ids.push(workspace_id);
             }
         }
         self.remove_plugin_pane_records(pane_ids);
+        for workspace_id in &closed_workspace_ids {
+            self.forget_workspace_history_for(workspace_id);
+        }
         for idx in close_indices.iter().rev() {
             self.workspaces.remove(*idx);
         }
@@ -1685,6 +1714,23 @@ impl AppState {
             self.previous_pane_focus = current;
             self.mark_session_dirty();
         }
+    }
+
+    #[cfg(test)]
+    pub fn last_workspace(&mut self) {
+        let Some(workspace_id) = self.previous_workspace_id.clone() else {
+            return;
+        };
+        let Some(ws_idx) = self.workspaces.iter().position(|ws| ws.id == workspace_id) else {
+            self.previous_workspace_id = None;
+            return;
+        };
+        if self.active == Some(ws_idx) {
+            self.previous_workspace_id = None;
+            return;
+        }
+
+        self.switch_workspace(ws_idx);
     }
 
     pub(crate) fn apply_pane_zoom(
@@ -3028,6 +3074,8 @@ impl AppState {
         self.mark_session_dirty();
 
         if should_close_workspace {
+            let workspace_id = self.workspaces[ws_idx].id.clone();
+            self.forget_workspace_history_for(&workspace_id);
             self.workspaces.remove(ws_idx);
             self.remove_unattached_terminal_ids(workspace_terminal_ids);
             if self.workspaces.is_empty() {
@@ -3997,6 +4045,51 @@ mod tests {
         assert_eq!(state.workspaces[1].active_tab, second_tab);
         assert_eq!(state.workspaces[1].focused_pane_id(), Some(second_tab_root));
         assert_ne!(second_first_root, second_tab_root);
+    }
+
+    #[test]
+    fn last_workspace_toggles_between_workspaces_without_tracking_tabs_or_panes() {
+        let mut state = app_with_workspaces(&["one", "two"]);
+        let first_second_tab = state.workspaces[0].test_add_tab(Some("logs"));
+        let first_logs_root = state.workspaces[0].tabs[first_second_tab].root_pane;
+        let second_second_tab = state.workspaces[1].test_add_tab(Some("review"));
+        let second_logs_root = state.workspaces[1].tabs[second_second_tab].root_pane;
+
+        state.switch_workspace(1);
+        state.switch_tab(second_second_tab);
+        state.switch_workspace(0);
+        state.switch_tab(first_second_tab);
+        state.last_workspace();
+
+        assert_eq!(state.active, Some(1));
+        assert_eq!(state.workspaces[1].active_tab, second_second_tab);
+        assert_eq!(
+            state.workspaces[1].focused_pane_id(),
+            Some(second_logs_root)
+        );
+
+        state.last_workspace();
+
+        assert_eq!(state.active, Some(0));
+        assert_eq!(state.workspaces[0].active_tab, first_second_tab);
+        assert_eq!(state.workspaces[0].focused_pane_id(), Some(first_logs_root));
+    }
+
+    #[test]
+    fn last_workspace_is_not_updated_by_tab_or_pane_navigation_inside_active_space() {
+        let mut state = app_with_workspaces(&["one", "two"]);
+        let first_root = state.workspaces[0].tabs[0].root_pane;
+        let first_second_tab = state.workspaces[0].test_add_tab(Some("logs"));
+        let first_logs_root = state.workspaces[0].tabs[first_second_tab].root_pane;
+
+        state.switch_workspace(1);
+        state.switch_workspace(0);
+        state.switch_tab(first_second_tab);
+        state.focus_pane_in_workspace(0, first_root);
+        state.focus_pane_in_workspace(0, first_logs_root);
+        state.last_workspace();
+
+        assert_eq!(state.active, Some(1));
     }
 
     #[test]
