@@ -82,14 +82,17 @@ After the change is integrated, remove the task worktree and delete the task bra
 
 ## Testing
 
-Use `just` recipes by default instead of invoking cargo or scripts directly.
+Use only the repo-local scripts for local builds and test validation. Do not
+invoke `cargo`, `just`, or `nix develop` directly for those tasks.
 
 ```bash
-just test               # cargo nextest + maintenance script tests
-just check              # formatting check + cargo nextest + maintenance script tests
+scripts/test-local.sh    # full test suite; silent unless it fails
+scripts/build-local.sh   # local release build; silent unless it fails
 ```
 
-Run `just check` before committing unless Can explicitly accepts narrower validation. Do not bypass failing checks; fix the failure or explain exactly why a narrower check is enough.
+Run `scripts/test-local.sh` before committing unless Can explicitly accepts
+narrower validation. Do not bypass failing checks; fix the failure or explain
+exactly why a narrower check is enough.
 
 Unit tests live next to the code (`#[cfg(test)] mod tests`). New `AppState` or `Workspace` behavior should be testable with `AppState::test_new()` and `Workspace::test_new()` without PTYs.
 

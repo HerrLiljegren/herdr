@@ -19,10 +19,14 @@ const KNOWN_TOP_LEVEL_CONFIG_KEYS: &[&str] = &[
 ];
 
 pub fn app_dir_name() -> &'static str {
-    if cfg!(debug_assertions) {
-        "herdr-dev"
-    } else {
-        "herdr"
+    app_dir_name_for(cfg!(debug_assertions), crate::build_info::channel())
+}
+
+fn app_dir_name_for(debug_assertions: bool, build_channel: &str) -> &'static str {
+    match (debug_assertions, build_channel) {
+        (true, _) => "herdr-dev",
+        (false, "local") => "herdr-local",
+        (false, _) => "herdr",
     }
 }
 
@@ -549,6 +553,14 @@ fn upsert_section_raw(content: &str, section: &str, key: &str, value: &str) -> S
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn local_release_build_uses_an_isolated_app_directory() {
+        assert_eq!(app_dir_name_for(false, "local"), "herdr-local");
+        assert_eq!(app_dir_name_for(false, "stable"), "herdr");
+        assert_eq!(app_dir_name_for(false, "preview"), "herdr");
+        assert_eq!(app_dir_name_for(true, "local"), "herdr-dev");
+    }
 
     #[test]
     fn upsert_top_level_bool_replaces_existing_value() {
