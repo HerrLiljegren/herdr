@@ -10,7 +10,7 @@ use ratatui::{
 
 use self::tokens::{ResolvedToken, ResolvedTokenKind, SpaceTokenContext};
 use super::scrollbar::{render_scrollbar, should_show_scrollbar};
-use super::status::{agent_icon, state_dot, state_label, state_label_color};
+use super::status::{state_icon, state_label, state_label_color};
 use super::text::{display_width, display_width_u16, truncate_end};
 use crate::app::state::{AgentPanelSort, Palette};
 use crate::app::{AppState, Mode};
@@ -230,15 +230,8 @@ fn workspace_row_height_in_body(
     workspace_row_height(app, workspace, indented).min(body_height)
 }
 
-fn workspace_entry_gap(
-    app: &AppState,
-    entries: &[WorkspaceListEntry],
-    entry_idx: usize,
-    indented: bool,
-) -> u16 {
-    if entry_idx + 1 < entries.len()
-        && !(indented && next_entry_is_indented_workspace(entries, entry_idx))
-    {
+fn workspace_entry_gap(app: &AppState, entries: &[WorkspaceListEntry], entry_idx: usize) -> u16 {
+    if entry_idx + 1 < entries.len() && !next_entry_is_indented_workspace(entries, entry_idx) {
         app.sidebar_spaces.row_gap
     } else {
         0
@@ -476,7 +469,7 @@ fn workspace_list_visible_count(app: &AppState, area: Rect, scroll: usize) -> us
                 };
                 (
                     workspace_row_height_in_body(app, ws, *indented, body.height),
-                    workspace_entry_gap(app, &entries, entry_idx, *indented),
+                    workspace_entry_gap(app, &entries, entry_idx),
                 )
             }
         };
@@ -500,7 +493,7 @@ fn workspace_list_bottom_start(app: &AppState, area: Rect) -> usize {
         let Some(workspace) = app.workspaces.get(*ws_idx) else {
             continue;
         };
-        let gap = workspace_entry_gap(app, &entries, entry_idx, *indented);
+        let gap = workspace_entry_gap(app, &entries, entry_idx);
         let needed = workspace_row_height_in_body(app, workspace, *indented, body.height)
             .saturating_add(gap);
         if used_rows.saturating_add(needed) > body.height {
@@ -691,7 +684,7 @@ pub(crate) fn compute_workspace_list_areas(
                     continue;
                 };
                 let row_height = workspace_row_height_in_body(app, ws, *indented, body.height);
-                let gap = workspace_entry_gap(app, &entries, entry_idx, *indented);
+                let gap = workspace_entry_gap(app, &entries, entry_idx);
                 if row_y.saturating_add(row_height) > body_bottom {
                     break;
                 }
@@ -788,7 +781,7 @@ pub(super) fn render_sidebar_collapsed(app: &AppState, frame: &mut Frame, area: 
             break;
         }
         let (agg_state, agg_seen) = ws.aggregate_state(&app.terminals);
-        let (icon, icon_style) = state_dot(agg_state, agg_seen, p);
+        let (icon, icon_style) = state_icon(agg_state, agg_seen, app.status_indicators, p);
         let is_selected = visible_idx == app.selected && is_navigating;
         let is_active = Some(visible_idx) == app.active;
         let row_style = if is_selected {
@@ -815,8 +808,7 @@ pub(super) fn render_sidebar_collapsed(app: &AppState, frame: &mut Frame, area: 
 
         frame.render_widget(
             Paragraph::new(Line::from(vec![
-                Span::styled(format!("{}", visible_idx + 1), num_style),
-                Span::styled(" ", row_style),
+                Span::styled(format!("{:<2}", visible_idx + 1), num_style),
                 Span::styled(icon, icon_style),
             ])),
             Rect::new(ws_area.x, y, ws_area.width, 1),
@@ -850,7 +842,8 @@ pub(super) fn render_sidebar_collapsed(app: &AppState, frame: &mut Frame, area: 
             }
             let position = detail_idx + 1;
             let position_style = Style::default().fg(p.overlay0);
-            let (icon, icon_style) = agent_icon(detail.state, detail.seen, app.spinner_tick, p);
+            let (icon, icon_style) =
+                state_icon(detail.state, detail.seen, app.status_indicators, p);
             frame.render_widget(
                 Paragraph::new(Line::from(vec![
                     Span::styled(format!("{position:<2}"), position_style),
@@ -1283,7 +1276,7 @@ fn render_workspace_list(
             .filter(|(_, collapsed)| *collapsed)
             .map(|(key, _)| space_aggregate_state(app, key))
             .unwrap_or((agg_state, agg_seen));
-        let state_icon = state_dot(display_state, display_seen, p);
+        let state_icon = state_icon(display_state, display_seen, app.status_indicators, p);
         let state_text_style = Style::default()
             .fg(state_label_color(display_state, display_seen, p))
             .add_modifier(Modifier::DIM);
@@ -1496,7 +1489,7 @@ fn render_agent_detail(
             Style::default().fg(label_color).add_modifier(Modifier::DIM)
         };
         let agent_style = Style::default().fg(p.overlay0).add_modifier(Modifier::DIM);
-        let state_icon = agent_icon(detail.state, detail.seen, app.spinner_tick, p);
+        let state_icon = state_icon(detail.state, detail.seen, app.status_indicators, p);
 
         for (row_index, resolved) in rows.iter().take(height as usize).enumerate() {
             let mut spans = vec![Span::raw(if row_index == 0 { " " } else { "   " })];
@@ -2133,6 +2126,47 @@ rows = [[{ token = "git_status", fg = "#123456" }]]
     }
 
     #[test]
+    fn collapsed_sidebar_keeps_workspace_status_visible_for_two_digit_positions() {
+        let mut app = crate::app::state::AppState::test_new();
+        app.workspaces = (1..=10)
+            .map(|idx| Workspace::test_new(&format!("workspace-{idx}")))
+            .collect();
+        app.ensure_test_terminals();
+
+        for ws_idx in 0..app.workspaces.len() {
+            let pane = app.workspaces[ws_idx].tabs[0].root_pane;
+            let terminal_id = app.workspaces[ws_idx].tabs[0].panes[&pane]
+                .attached_terminal_id
+                .clone();
+            app.terminals.get_mut(&terminal_id).unwrap().detected_agent = Some(Agent::Claude);
+        }
+
+        let area = Rect::new(0, 0, 4, 25);
+        let (workspace_area, _, _) = collapsed_sidebar_sections(area);
+        let mut terminal = Terminal::new(TestBackend::new(area.width, area.height))
+            .expect("test terminal should initialize");
+
+        terminal
+            .draw(|frame| render_sidebar_collapsed(&app, frame, area))
+            .expect("collapsed sidebar should render");
+
+        let tenth_row = workspace_area.y + 9;
+        let buffer = terminal.backend().buffer();
+        assert_eq!(buffer[(workspace_area.x, workspace_area.y)].symbol(), "1");
+        assert_eq!(
+            buffer[(workspace_area.x + 1, workspace_area.y)].symbol(),
+            " "
+        );
+        assert_eq!(
+            buffer[(workspace_area.x + 2, workspace_area.y)].symbol(),
+            "·"
+        );
+        assert_eq!(buffer[(workspace_area.x, tenth_row)].symbol(), "1");
+        assert_eq!(buffer[(workspace_area.x + 1, tenth_row)].symbol(), "0");
+        assert_eq!(buffer[(workspace_area.x + 2, tenth_row)].symbol(), "·");
+    }
+
+    #[test]
     fn collapsed_sidebar_keeps_status_visible_for_two_digit_positions() {
         let mut app = crate::app::state::AppState::test_new();
         app.workspaces = (1..=10)
@@ -2161,7 +2195,7 @@ rows = [[{ token = "git_status", fg = "#123456" }]]
         let buffer = terminal.backend().buffer();
         assert_eq!(buffer[(detail_area.x, tenth_row)].symbol(), "1");
         assert_eq!(buffer[(detail_area.x + 1, tenth_row)].symbol(), "0");
-        assert_eq!(buffer[(detail_area.x + 2, tenth_row)].symbol(), "○");
+        assert_eq!(buffer[(detail_area.x + 2, tenth_row)].symbol(), "·");
     }
 
     #[test]
@@ -2176,6 +2210,7 @@ rows = [[{ token = "git_status", fg = "#123456" }]]
         app.workspaces = vec![first, second];
         app.ensure_test_terminals();
         app.agent_panel_sort = crate::app::state::AgentPanelSort::Priority;
+        app.status_indicators = crate::config::StatusIndicatorStyle::Symbols;
 
         let set_state = |app: &mut crate::app::state::AppState, ws_idx: usize, pane_id, state| {
             let terminal_id = app.workspaces[ws_idx].tabs[0].panes[&pane_id]
@@ -2185,9 +2220,14 @@ rows = [[{ token = "git_status", fg = "#123456" }]]
             terminal.detected_agent = Some(Agent::Claude);
             terminal.state = state;
         };
-        set_state(&mut app, 0, first_pane, AgentState::Working);
+        set_state(&mut app, 0, first_pane, AgentState::Idle);
         set_state(&mut app, 1, second_pane, AgentState::Working);
         set_state(&mut app, 1, urgent_pane, AgentState::Blocked);
+        app.workspaces[0].tabs[0]
+            .panes
+            .get_mut(&first_pane)
+            .unwrap()
+            .seen = false;
 
         assert_eq!(app.workspaces[1].public_pane_number(urgent_pane), Some(2));
         assert_eq!(agent_panel_entries(&app)[0].pane_id, urgent_pane);
@@ -2205,10 +2245,15 @@ rows = [[{ token = "git_status", fg = "#123456" }]]
         assert_eq!(buffer[(detail_area.x, detail_area.y)].symbol(), "1");
         assert_eq!(buffer[(detail_area.x, detail_area.y + 1)].symbol(), "2");
         assert_eq!(buffer[(detail_area.x, detail_area.y + 2)].symbol(), "3");
-        assert_eq!(buffer[(detail_area.x + 2, detail_area.y)].symbol(), "◉");
+        assert_eq!(buffer[(detail_area.x + 2, detail_area.y)].symbol(), "×");
         assert_eq!(
             buffer[(detail_area.x + 2, detail_area.y)].style().fg,
             Some(app.palette.red)
+        );
+        assert_eq!(buffer[(detail_area.x + 2, detail_area.y + 1)].symbol(), "✓");
+        assert_eq!(
+            buffer[(detail_area.x + 2, detail_area.y + 1)].style().fg,
+            Some(app.palette.teal)
         );
     }
 
@@ -2254,11 +2299,12 @@ rows = [[{ token = "git_status", fg = "#123456" }]]
             live_cwd.clone(),
             0,
             crate::terminal_theme::TerminalTheme::default(),
+            None,
             crate::pane::PaneShellConfig::new("/bin/sh", crate::config::ShellModeConfig::NonLogin),
             &crate::pane::PaneLaunchEnv::default(),
             events,
             std::sync::Arc::new(tokio::sync::Notify::new()),
-            std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            std::sync::Arc::new(crate::render_signal::RenderSignal::new()),
         )
         .unwrap();
 
@@ -2386,7 +2432,7 @@ rows = [[{ token = "git_status", fg = "#123456" }]]
         ws.cached_git_space = Some(crate::workspace::GitSpaceMetadata {
             key: key.into(),
             checkout_key: format!("/repo/{name}"),
-            label: "herdr".into(),
+            repo_name: "herdr".into(),
             repo_root: std::path::PathBuf::from(format!("/repo/{name}")),
             is_linked_worktree: false,
         });
@@ -2488,7 +2534,7 @@ rows = [[{ token = "git_status", fg = "#123456" }]]
         assert!(!cards[0].indented);
         assert_eq!(cards[1].ws_idx, 1);
         assert!(cards[1].indented);
-        assert_eq!(cards[1].rect.y, cards[0].rect.y + cards[0].rect.height + 1);
+        assert_eq!(cards[1].rect.y, cards[0].rect.y + cards[0].rect.height);
     }
 
     #[test]
@@ -2506,7 +2552,7 @@ rows = [[{ token = "git_status", fg = "#123456" }]]
         let (spacious, _) = compute_workspace_list_areas(&app, Rect::new(0, 0, 30, 30));
         assert_eq!(
             spacious[1].rect.y,
-            spacious[0].rect.y + spacious[0].rect.height + 2
+            spacious[0].rect.y + spacious[0].rect.height
         );
         assert_eq!(
             spacious[2].rect.y,
@@ -2517,7 +2563,7 @@ rows = [[{ token = "git_status", fg = "#123456" }]]
             spacious[2].rect.y + spacious[2].rect.height + 2
         );
         let spacious_metrics = workspace_list_scroll_metrics(&app, Rect::new(0, 0, 30, 7));
-        assert_eq!(spacious_metrics.viewport_rows, 2);
+        assert_eq!(spacious_metrics.viewport_rows, 3);
         assert_eq!(spacious_metrics.max_offset_from_bottom, 2);
 
         app.sidebar_spaces.row_gap = 0;
